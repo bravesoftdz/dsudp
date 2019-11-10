@@ -2,45 +2,56 @@ unit dsudp.base;
 
 interface
 
+{$IF CompilerVersion >= 31.0}
 uses
   System.SysUtils, System.Classes, System.IniFiles, System.DateUtils,
   IdUDPServer, IdGlobal;
+{$ELSE}
+
+uses
+  SysUtils, Classes, IniFiles, DateUtils, IdUDPServer, IdGlobal, Windows;
+{$IFEND}
 
 const
   UDP_MAX_PACKET_SIZE = 1024;
   UDP_TIME_OUT = 10 * 1000;
 
 type
-  TUDPPacket = packed record
-    Head: Integer;
-    Typ: Byte;
-    Id: Integer;
-    Size: Int64;
-    Data: TIdBytes;
+  TPacketType = (pt_Connect, pt_Auth, pt_ROBytes, pt_ROString, pt_RBytes, pt_RString, pt_Bytes, pt_String);
+
+  TUDPPacket = class(TObject)
+  public
+    PacketType: TPacketType; // 数据类型
+    Id: Integer; // 数据包ID
+    OrderId: Int64; // 数据序列
+    Size: Int64; // 数据大小
+    Data: TIdBytes; // 数据
   end;
 
   TMisc = class(TObject)
   public
     class function TimeUnix: Int64;
+    class function TickCount: Cardinal;
   end;
 
   TUDPClient = class(TObject)
   private
     FAddr: string;
     FPort: Word;
-    FDate: Int64;
+    FTick: Cardinal;
     FId: string;
     FConnected: Boolean;
     procedure SetAddr(Value: string);
     procedure SetPort(Value: Word);
-    procedure SetDate(Value: Int64);
+    procedure SetTick(Value: Cardinal);
     procedure SetId(Value: string);
     procedure SetConnected(Value: Boolean);
   public
     constructor Create;
+    procedure TickMark;
     property Addr: string read FAddr write SetAddr;
     property Port: Word read FPort write SetPort;
-    property Date: Int64 read FDate write SetDate;
+    property Tick: Cardinal read FTick write SetTick;
     property Id: string read FId write SetId;
     property Connected: Boolean read FConnected write SetConnected;
   end;
@@ -68,6 +79,15 @@ begin
   Result := DateTimeToUnix(Now);
 end;
 
+class function TMisc.TickCount: Cardinal;
+begin
+{$IF CompilerVersion >= 31.0}
+  Result := TThread.GetTickCount;
+{$ELSE}
+  Result := Windows.GetTickCount;
+{$IFEND}
+end;
+
 // class TUDPClient
 
 constructor TUDPClient.Create;
@@ -75,9 +95,14 @@ begin
   inherited Create;
   FAddr := '';
   FPort := 0;
-  FDate := TMisc.TimeUnix;
+  FTick := TMisc.TickCount;
   FId := '';
   FConnected := False;
+end;
+
+procedure TUDPClient.TickMark;
+begin
+  FTick := TMisc.TickCount;
 end;
 
 procedure TUDPClient.SetAddr(Value: string);
@@ -92,9 +117,9 @@ begin
   SetId(FAddr + ':' + IntToStr(FPort));
 end;
 
-procedure TUDPClient.SetDate(Value: Int64);
+procedure TUDPClient.SetTick(Value: Cardinal);
 begin
-  FDate := Value;
+  FTick := Value;
 end;
 
 procedure TUDPClient.SetId(Value: string);
