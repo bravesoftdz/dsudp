@@ -5,11 +5,14 @@ program DSUDP;
 {$R *.res}
 
 uses
-  System.SysUtils,
-  dsudp.base in 'dsudp.base.pas';
+  SysUtils,
+  dsudp.base in 'dsudp.base.pas',
+  dsudp.socket in 'dsudp.socket.pas';
 
 begin
   try
+    Writeln(SizeOf(TUDPPacket));
+    Readln;
     { TODO -oUser -cConsole Main : Insert code here }
   except
     on E: Exception do
