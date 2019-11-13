@@ -5,11 +5,13 @@ interface
 {$IF CompilerVersion >= 31.0}
 uses
   System.SysUtils, System.Classes, System.IniFiles, System.DateUtils,
-  System.SyncObjs, System.Contnrs, IdGlobal;
+  System.SyncObjs, System.Contnrs, System.Generics.Collections,
+  System.Generics.Defaults, IdGlobal;
 {$ELSE}
 
 uses
-  SysUtils, Classes, Windows, IniFiles, DateUtils, SyncObjs, Contnrs, IdGlobal;
+  SysUtils, Classes, Windows, IniFiles, DateUtils, SyncObjs, Contnrs,
+  Generics.Collections, Generics.Defaults, IdGlobal;
 {$IFEND}
 
 const
@@ -18,12 +20,40 @@ const
   UDP_HEAD = -1;
 
 type
-  TPacketType = (pt_None, pt_Connect, pt_Disconnect, pt_Auth, pt_ROBytes, pt_ROString, pt_RBytes, pt_RString, pt_Bytes, pt_String, pt_Stream);
+  TPacketType = (pt_HeartBeat, pt_Connect, pt_Disconnect, pt_Auth, pt_ROBytes, pt_ROString, pt_RBytes, pt_RString, pt_UBytes, pt_UString);
 
   TMisc = class(TObject)
   public
     class function TimeUnix: Int64;
     class function TickCount: Cardinal;
+  end;
+
+  TIndexList = TList<Integer>;
+
+  TUDPClient = class(TObject)
+  private
+    FAddr: string;
+    FPort: Word;
+    FTick: Cardinal;
+    FId: string;
+    FToken: string;
+    FConnected: Boolean;
+    procedure SetAddr(Value: string);
+    procedure SetPort(Value: Word);
+    procedure SetTick(Value: Cardinal);
+    procedure SetId(Value: string);
+    procedure SetConnected(Value: Boolean);
+    procedure SetToken(Value: string);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure TickMark;
+    property Addr: string read FAddr write SetAddr;
+    property Port: Word read FPort write SetPort;
+    property Tick: Cardinal read FTick write SetTick;
+    property Id: string read FId write SetId;
+    property Connected: Boolean read FConnected write SetConnected;
+    property Token: string read FToken write SetToken;
   end;
 
   TUDPPacket = class(TObject)
@@ -34,6 +64,8 @@ type
     Size: Int64; // 数据大小
     Data: TIdBytes; // 数据
     Disposed: Boolean; // 已经处理
+    PeerAddr: string; // 客户端IP
+    PeerPort: Word; // 客户端端口
     constructor Create;
     destructor Destroy; override;
   end;
@@ -46,31 +78,14 @@ type
     constructor Create;
     destructor Destroy; override;
     function Push(Item: TUDPPacket): Integer;
-    function Pop(Index: Integer): TUDPPacket;
-    procedure Delete(Index: Integer);
+    function Pop(Index: Integer): TUDPPacket; overload;
+    function Pop: TUDPPacket; overload;
+    function Count: Integer;
+    procedure Delete(Index: Integer); overload;
+    procedure Delete; overload;
   end;
 
-  TUDPClient = class(TObject)
-  private
-    FAddr: string;
-    FPort: Word;
-    FTick: Cardinal;
-    FId: string;
-    FConnected: Boolean;
-    procedure SetAddr(Value: string);
-    procedure SetPort(Value: Word);
-    procedure SetTick(Value: Cardinal);
-    procedure SetId(Value: string);
-    procedure SetConnected(Value: Boolean);
-  public
-    constructor Create;
-    procedure TickMark;
-    property Addr: string read FAddr write SetAddr;
-    property Port: Word read FPort write SetPort;
-    property Tick: Cardinal read FTick write SetTick;
-    property Id: string read FId write SetId;
-    property Connected: Boolean read FConnected write SetConnected;
-  end;
+  TUDPConnections = TList<TUDPClient>;
 
   TUDPClientList = class(TObject)
   private
@@ -82,8 +97,10 @@ type
     procedure Clear;
     procedure DeleteClient(Id: string); overload;
     procedure DeleteClient(Index: Integer); overload;
+    procedure Connections(var Connections: TUDPConnections);
     function AddClient(Client: TUDPClient): Integer;
-    function Client(Id: string): Integer;
+    function Client(Id: string): Integer; overload;
+    function Client(Index: Integer): TUDPClient; overload;
     function Count: Integer;
   end;
 
@@ -109,12 +126,14 @@ end;
 constructor TUDPPacket.Create;
 begin
   inherited Create;
-  PacketType := pt_None;
+  PacketType := pt_HeartBeat;
   Id := 0;
   OrderId := 0;
   Size := 0;
   Disposed := False;
   SetLength(Data, 0);
+  PeerAddr := '';
+  PeerPort := 0;
 end;
 
 destructor TUDPPacket.Destroy;
@@ -122,6 +141,96 @@ begin
   SetLength(Data, 0);
   inherited Destroy;
 end;
+
+// class TUDPQueue
+
+constructor TUDPQueue.Create;
+begin
+  inherited Create;
+  FList := TObjectList.Create;
+  FLocker := TCriticalSection.Create;
+end;
+
+destructor TUDPQueue.Destroy;
+begin
+  FList.Free;
+  FLocker.Free;
+  inherited Destroy;
+end;
+
+procedure TUDPQueue.Delete(Index: Integer);
+begin
+  FLocker.Enter;
+  try
+    FList.Delete(Index);
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+procedure TUDPQueue.Delete;
+begin
+  FLocker.Enter;
+  try
+    if FList.Count > 0 then
+    begin
+      FList.Delete(0);
+    end;
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+function TUDPQueue.Push(Item: TUDPPacket): Integer;
+begin
+  FLocker.Enter;
+  try
+    Result := FList.Add(Item);
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+function TUDPQueue.Count: Integer;
+begin
+  FLocker.Enter;
+  try
+    Result := FList.Count;
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+function TUDPQueue.Pop(Index: Integer): TUDPPacket;
+begin
+
+  FLocker.Enter;
+  try
+    Result := nil;
+
+    if FList.Count > Index then
+    begin
+      Result := TUDPPacket(FList.Items[Index]);
+    end;
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+function TUDPQueue.Pop: TUDPPacket;
+begin
+  FLocker.Enter;
+  try
+    Result := nil;
+    if FList.Count > 0 then
+    begin
+      Result := TUDPPacket(FList.Items[0]);
+    end;
+  finally
+    FLocker.Leave;
+  end;
+end;
+
 // class TUDPClient
 
 constructor TUDPClient.Create;
@@ -132,6 +241,11 @@ begin
   FTick := TMisc.TickCount;
   FId := '';
   FConnected := False;
+end;
+
+destructor TUDPClient.Destroy;
+begin
+  inherited Destroy;
 end;
 
 procedure TUDPClient.TickMark;
@@ -164,6 +278,11 @@ end;
 procedure TUDPClient.SetConnected(Value: Boolean);
 begin
   FConnected := Value;
+end;
+
+procedure TUDPClient.SetToken(Value: string);
+begin
+  FToken := Value;
 end;
 
 // class TUDPClientList
@@ -218,6 +337,28 @@ begin
   end;
 end;
 
+procedure TUDPClientList.Connections(var Connections: TUDPConnections);
+var
+  I: Integer;
+begin
+  FLocker.Enter;
+  try
+    if FHashList.Count > 0 then
+    begin
+
+      Connections.Clear;
+
+      for I := 0 to FHashList.Count - 1 do
+      begin
+        Connections.Add(TUDPClient(FHashList.Objects[I]));
+      end;
+
+    end;
+  finally
+    FLocker.Leave;
+  end;
+end;
+
 function TUDPClientList.AddClient(Client: TUDPClient): Integer;
 begin
   FLocker.Enter;
@@ -241,6 +382,16 @@ begin
   FLocker.Enter;
   try
     Result := FHashList.IndexOfName(Id);
+  finally
+    FLocker.Leave;
+  end;
+end;
+
+function TUDPClientList.Client(Index: Integer): TUDPClient;
+begin
+  FLocker.Enter;
+  try
+    Result := TUDPClient(FHashList.Objects[Index]);
   finally
     FLocker.Leave;
   end;
