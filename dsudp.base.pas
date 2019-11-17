@@ -20,7 +20,7 @@ const
   UDP_HEAD = -1;
 
 type
-  TPacketType = (pt_HeartBeat, pt_Connect, pt_Disconnect, pt_Auth, pt_ROBytes, pt_ROString, pt_RBytes, pt_RString, pt_UBytes, pt_UString);
+  TPacketType = (pt_HeartBeat, pt_Auth, pt_Disconnect, pt_ROBytes, pt_ROString, pt_UBytes, pt_UString);
 
   TMisc = class(TObject)
   public
@@ -59,9 +59,10 @@ type
   TUDPPacket = class(TObject)
   public
     PacketType: TPacketType; // 数据类型
-    Id: Integer; // 数据包ID
-    OrderId: Int64; // 数据序列
-    Size: Int64; // 数据大小
+    Id: Int64; // 数据包ID
+    OrderId: Integer; // 数据序列
+    TotalSize: Integer; // 数据包总大小
+    CurSize: Integer; // 当前数据大小
     Data: TIdBytes; // 数据
     Disposed: Boolean; // 已经处理
     PeerAddr: string; // 客户端IP
@@ -129,7 +130,8 @@ begin
   PacketType := pt_HeartBeat;
   Id := 0;
   OrderId := 0;
-  Size := 0;
+  CurSize := 0;
+  TotalSize := 0;
   Disposed := False;
   SetLength(Data, 0);
   PeerAddr := '';
