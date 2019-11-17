@@ -527,7 +527,7 @@ begin
   Packet.PacketType := pt_HeartBeat;
   Packet.Id := FPacketId;
   Packet.OrderId := 0;
-  Packet.Confirm := True;
+  Packet.Confirm := False;
   Packet.TotalSize := 0;
   Packet.CurSize := 0;
   SetLength(Packet.Data, 0);
