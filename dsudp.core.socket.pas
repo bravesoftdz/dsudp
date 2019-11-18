@@ -44,6 +44,23 @@ type
     property Connections: TDSConnectionList read FDSConnectionList write FDSConnectionList;
   end;
 
+  TDSHeartBeatFrame = class(TThread)
+  private
+    FSocket: TIdUDPServer;
+    FDSConnectionList: TDSConnectionList;
+    FHeartBeatTick: Cardinal;
+    FTimeOutTick: Cardinal;
+    procedure BroadcastHeartBeat;
+    procedure SendHeartBeat(Connection: TDSConnection);
+    procedure TimeOutConnection;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create;
+    property Socket: TIdUDPServer read FSocket write FSocket;
+    property Connections: TDSConnectionList read FDSConnectionList write FDSConnectionList;
+  end;
+
 implementation
 
 // class TDSSendFrame
@@ -117,7 +134,7 @@ begin
 
   Result := 0;
 
-  if Connection.Connected then
+  if not Connection.Disconnect then
   begin
     Result := Connection.SendQueue.Count;
 
@@ -174,6 +191,7 @@ begin
 
   if FDSConnectionList <> nil then
   begin
+
     Connections := TDSConnectionsEx.Create;
     try
       FDSConnectionList.Connections(Connections);
@@ -182,9 +200,11 @@ begin
       begin
         QueueCount := QueueCount + DisposeQueue(Connections.Items[I]);
       end;
+
     finally
       Connections.Free;
     end;
+
   end;
 
   if QueueCount = 0 then
@@ -219,6 +239,12 @@ begin
               Connection.ConfirmRecv(Packet.Id, Packet.OrderId);
               Connection.DeleteSendQueue(Packet.Id);
             end;
+
+            if Packet.PacketType = pt_Disconnect then
+            begin
+              Connection.Disconnect := True;
+            end;
+
             Indexs.Add(I);
           end
           else
@@ -234,71 +260,77 @@ begin
               begin
                 Connection.ConfirmRecv(Packet.Id, Packet.OrderId);
 
-                case Packet.PacketType of
-                  pt_Auth:
+                if (not Connection.Connected) and (Packet.PacketType = pt_Auth) then
+                begin
+                  SetLength(PacketString, Packet.TotalSize);
+                  try
+                    Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
+                    if PacketString = Connection.Token then
                     begin
-                      SetLength(PacketString, Packet.TotalSize);
-                      try
-                        Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
-                        if PacketString = Connection.Token then
-                        begin
-                          Connection.Connected := True;
-                          Connection.OnConnected(PacketString);
+                      Connection.Connected := True;
+                      Connection.Disconnect := False;
+                      Connection.OnConnected(PacketString);
+                    end;
+                  finally
+                    SetLength(PacketString, 0);
+                  end;
+                end
+                else if Connection.Connected then
+                begin
+                  Connection.TickMark;
+
+                  case Packet.PacketType of
+                    pt_HeartBeat:
+                      begin
+                        Connection.OnHeartBeat;
+                      end;
+                    pt_Disconnect:
+                      begin
+                        Connection.Connected := False;
+                        Connection.Disconnect := True;
+                        Connection.OnDisconnect;
+                      end;
+                    pt_ROBytes:
+                      begin
+                        SetLength(PacketBytes, Packet.TotalSize);
+                        try
+                          Move(Packet.Data[0], PacketBytes[0], Packet.TotalSize);
+                          Connection.OnRecvROBytes(PacketBytes);
+                        finally
+                          SetLength(PacketBytes, 0);
                         end;
-                      finally
-                        SetLength(PacketString, 0);
                       end;
-                    end;
-                  pt_HeartBeat:
-                    begin
-                      Connection.TickMark;
-                      Connection.OnHeartBeat;
-                    end;
-                  pt_Disconnect:
-                    begin
-                      Connection.Connected := False;
-                      Connection.OnDisconnect;
-                    end;
-                  pt_ROBytes:
-                    begin
-                      SetLength(PacketBytes, Packet.TotalSize);
-                      try
-                        Move(Packet.Data[0], PacketBytes[0], Packet.TotalSize);
-                        Connection.OnRecvROBytes(PacketBytes);
-                      finally
-                        SetLength(PacketBytes, 0);
+                    pt_ROString:
+                      begin
+                        SetLength(PacketString, Packet.TotalSize);
+                        try
+                          Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
+                          Connection.OnRecvROString(PacketString);
+                        finally
+                          SetLength(PacketString, 0);
+                        end;
                       end;
-                    end;
-                  pt_ROString:
-                    begin
-                      SetLength(PacketString, Packet.TotalSize);
-                      try
-                        Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
-                        Connection.OnRecvROString(PacketString);
-                      finally
-                        SetLength(PacketString, 0);
+                    pt_UBytes:
+                      begin
+                        SetLength(PacketBytes, Packet.TotalSize);
+                        try
+                          Move(Packet.Data[0], PacketBytes[0], Packet.TotalSize);
+                          Connection.OnRecvUBytes(PacketBytes);
+                        finally
+                          SetLength(PacketBytes, 0);
+                        end;
                       end;
-                    end;
-                  pt_UBytes:
-                    begin
-                      SetLength(PacketBytes, Packet.TotalSize);
-                      try
-                        Move(Packet.Data[0], PacketBytes[0], Packet.TotalSize);
-                        Connection.OnRecvUBytes(PacketBytes);
-                      finally
-                        SetLength(PacketBytes, 0);
+                    pt_UString:
+                      begin
+                        SetLength(PacketString, Packet.TotalSize);
+                        try
+                          Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
+                          Connection.OnRecvUString(PacketString);
+                        finally
+                          SetLength(PacketString, 0);
+                        end;
                       end;
-                    end;
-                  pt_UString:
-                    begin
-                      SetLength(PacketString, Packet.TotalSize);
-                      try
-                        Move(Packet.Data[0], PacketString[1], Packet.TotalSize);
-                        Connection.OnRecvUString(PacketString);
-                      finally
-                        SetLength(PacketString, 0);
-                      end;
-                    end;
+                  end;
                 end;
               end;
 
@@ -307,6 +339,8 @@ begin
             end
             else if Packet.TotalSize > Packet.CurSize then
             begin
+              Connection.TickMark;
+
               Connection.PostConfirm(Packet.Id, Packet.OrderId, Packet.PacketType);
 
               if not Connection.Recved(Packet.Id, Packet.OrderId) then
@@ -338,9 +372,60 @@ begin
 end;
 
 function TDSRecvFrame.SetupPacket(Connection: TDSConnection; PacketId: Int64): Boolean;
+var
+  PacketComplete: Boolean;
+  Packet: TDSPacket;
+  PacketSize, PacketPosition: Integer;
+  I: Integer;
+  DataBytes: TBytes;
+  DataString: string;
 begin
   // ·Ö¿é°ü
-  Result := False;
+
+  PacketComplete := False;
+  PacketSize := 0;
+  PacketPosition := 0;
+
+  for I := 0 to Connection.RecvQueue.Count - 1 do
+  begin
+    Packet := Connection.RecvQueue.Pop(I);
+    if (Packet <> nil) and (Assigned(Packet)) then
+    begin
+      if Packet.Id = PacketId then
+      begin
+
+        Inc(PacketSize, Packet.CurSize);
+        SetLength(DataBytes, PacketSize);
+        Move(Packet.Data[PacketPosition], DataBytes[PacketPosition], Packet.CurSize);
+        Inc(PacketPosition, Packet.CurSize);
+
+        PacketComplete := PacketSize = Packet.TotalSize;
+        if PacketComplete then
+        begin
+          if Packet.PacketType = pt_ROBytes then
+          begin
+            Connection.OnRecvROBytes(DataBytes);
+          end
+          else if Packet.PacketType = pt_ROString then
+          begin
+            SetLength(DataString, PacketSize);
+            try
+              Move(DataBytes[0], DataString[1], PacketSize);
+              Connection.OnRecvROString(DataString);
+            finally
+              SetLength(DataString, 0);
+            end;
+          end;
+
+          Break;
+        end;
+      end;
+    end;
+  end;
+
+  SetLength(DataBytes, 0);
+
+  Result := PacketComplete;
 end;
 
 procedure TDSRecvFrame.DisposePacket(Connection: TDSConnection; PacketIndexs: TPacketIndexs);
@@ -401,6 +486,125 @@ begin
   inherited Create(True);
   FDSConnectionList := nil;
   FreeOnTerminate := True;
+end;
+
+// class TDSHeartBeatFrame
+
+constructor TDSHeartBeatFrame.Create;
+begin
+  inherited Create(True);
+  FSocket := nil;
+  FDSConnectionList := nil;
+  FreeOnTerminate := True;
+  FHeartBeatTick := TDSMisc.TickCount;
+  FTimeOutTick := TDSMisc.TickCount;
+end;
+
+procedure TDSHeartBeatFrame.Execute;
+begin
+  while not Terminated do
+  begin
+
+    if FHeartBeatTick + UDP_HEARTBEAT_TIME <= TDSMisc.TickCount then
+    begin
+      FHeartBeatTick := TDSMisc.TickCount;
+      BroadcastHeartBeat;
+    end;
+
+    if FTimeOutTick + UDP_TIME_OUT <= TDSMisc.TickCount then
+    begin
+      FTimeOutTick := TDSMisc.TickCount;
+      TimeOutConnection;
+    end;
+
+    Sleep(1);
+  end;
+end;
+
+procedure TDSHeartBeatFrame.TimeOutConnection;
+var
+  I: Integer;
+  Connections: TDSConnectionsEx;
+  Indexs: TIndexs;
+begin
+
+  Indexs := TIndexs.Create;
+  try
+
+    if (FDSConnectionList <> nil) and (FSocket <> nil) then
+    begin
+      Connections := TDSConnectionsEx.Create;
+      try
+        FDSConnectionList.Connections(Connections);
+
+        for I := 0 to Connections.Count - 1 do
+        begin
+          if (Connections.Items[I].Tick + UDP_TIME_OUT) <= TDSMisc.TickCount then
+          begin
+            Indexs.Add(I);
+          end;
+        end;
+
+      finally
+        Connections.Free;
+      end;
+    end;
+
+    Indexs.Sort;
+
+    for I := Indexs.Count - 1 downto 0 do
+    begin
+      FDSConnectionList.DeleteClient(Indexs.Items[I]);
+    end;
+
+  finally
+    Indexs.Free;
+  end;
+end;
+
+procedure TDSHeartBeatFrame.SendHeartBeat(Connection: TDSConnection);
+var
+  SendData: TBytesStream;
+begin
+  SendData := TBytesStream.Create;
+  try
+    SendData.Position := 0;
+    SendData.WriteData(Integer(UDP_HEAD));
+    SendData.WriteData(TPacketType(pt_HeartBeat));
+    SendData.WriteData(Int64(0));
+    SendData.WriteData(Integer(0));
+    SendData.WriteData(Boolean(False));
+    SendData.WriteData(Integer(0));
+    SendData.WriteData(Integer(0));
+    SendData.WriteData(Byte(0));
+    SendData.Position := 0;
+
+    FSocket.SendBuffer(Connection.RemoteAddr, Connection.RemotePort, TIdBytes(SendData.Bytes));
+  finally
+    SendData.Free;
+  end;
+end;
+
+procedure TDSHeartBeatFrame.BroadcastHeartBeat;
+var
+  I: Integer;
+  Connections: TDSConnectionsEx;
+begin
+  if (FDSConnectionList <> nil) and (FSocket <> nil) then
+  begin
+    Connections := TDSConnectionsEx.Create;
+    try
+      FDSConnectionList.Connections(Connections);
+
+      for I := 0 to Connections.Count - 1 do
+      begin
+        SendHeartBeat(Connections.Items[I]);
+        Sleep(1);
+      end;
+    finally
+      Connections.Free;
+    end;
+  end;
 end;
 
 end.

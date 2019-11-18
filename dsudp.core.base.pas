@@ -17,6 +17,7 @@ uses
 const
   UDP_MAX_PACKET_SIZE = 1024;
   UDP_TIME_OUT = 30 * 1000;
+  UDP_HEARTBEAT_TIME = 3000;
   UDP_HEAD = -1;
 
 type
@@ -82,6 +83,7 @@ type
     FId: string;
     FToken: string;
     FConnected: Boolean;
+    FDisconnect: Boolean;
     FSendQueue: TDSQueue;
     FRecvQueue: TDSQueue;
     FRecvConfirm: TDSConfirms;
@@ -92,6 +94,7 @@ type
     procedure SetTick(Value: Cardinal);
     procedure SetId(Value: string);
     procedure SetConnected(Value: Boolean);
+    procedure SetDisconnected(Value: Boolean);
     procedure SetToken(Value: string);
   public
     constructor Create;
@@ -102,7 +105,6 @@ type
     procedure PostUBytes(Data: TBytes);
     procedure PostUString(Data: string);
     procedure PostConfirm(PacketId: Int64; OrderId: Integer; PacketType: TPacketType);
-    procedure PostHeartBeat;
     procedure OnConnected(Token: string);
     procedure OnDisconnect;
     procedure OnHeartBeat;
@@ -119,6 +121,7 @@ type
     property Tick: Cardinal read FTick write SetTick;
     property Id: string read FId write SetId;
     property Connected: Boolean read FConnected write SetConnected;
+    property Disconnect: Boolean read FDisconnect write SetDisconnected;
     property Token: string read FToken write SetToken;
     property SendQueue: TDSQueue read FSendQueue;
     property RecvQueue: TDSQueue read FRecvQueue;
@@ -309,6 +312,7 @@ begin
   FTick := TDSMisc.TickCount;
   FId := '';
   FConnected := False;
+  FDisconnect := False;
   FSendQueue := TDSQueue.Create;
   FRecvQueue := TDSQueue.Create;
   FRecvConfirm := TDSConfirms.Create;
@@ -519,23 +523,6 @@ begin
   FSendQueue.Push(Packet);
 end;
 
-procedure TDSConnection.PostHeartBeat;
-var
-  Packet: TDSPacket;
-begin
-  Packet := TDSPacket.Create;
-  Packet.PacketType := pt_HeartBeat;
-  Packet.Id := FPacketId;
-  Packet.OrderId := 0;
-  Packet.Confirm := False;
-  Packet.TotalSize := 0;
-  Packet.CurSize := 0;
-  SetLength(Packet.Data, 0);
-
-  FSendQueue.Push(Packet);
-  Inc(FPacketId, 1);
-end;
-
 procedure TDSConnection.OnConnected(Token: string);
 begin
 
@@ -590,6 +577,8 @@ begin
 
     if (FConfirmTick + UDP_TIME_OUT) <= TDSMisc.TickCount then
     begin
+      FConfirmTick := TDSMisc.TickCount;
+
       for I := FRecvConfirm.Count - 1 downto 0 do
       begin
         if (FRecvConfirm.Items[I].Tick + UDP_TIME_OUT) <= TDSMisc.TickCount then
@@ -672,6 +661,11 @@ end;
 procedure TDSConnection.SetConnected(Value: Boolean);
 begin
   FConnected := Value;
+end;
+
+procedure TDSConnection.SetDisconnected(Value: Boolean);
+begin
+  FDisconnect := Value;
 end;
 
 procedure TDSConnection.SetToken(Value: string);
