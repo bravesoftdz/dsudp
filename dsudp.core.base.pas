@@ -16,17 +16,48 @@ uses
 
 const
   UDP_MAX_PACKET_SIZE = 1024;
-  UDP_TIME_OUT = 30 * 1000;
+  UDP_TIME_OUT = 10 * 1000;
   UDP_HEARTBEAT_TIME = 3000;
+  UDP_DISCONNECTED = 3000;
   UDP_HEAD = -1;
 
 type
-  TPacketType = (pt_HeartBeat, pt_Auth, pt_Disconnect, pt_ROBytes, pt_ROString, pt_UBytes, pt_UString);
+  TPacketType = (pt_Connect = 100, pt_HeartBeat, pt_Auth, pt_Disconnect, pt_ROBytes, pt_ROString, pt_UBytes, pt_UString);
 
   TDSMisc = class(TObject)
   public
     class function TimeUnix: Int64;
     class function TickCount: Cardinal;
+  end;
+
+  TBytesStreamEx = class(TBytesStream)
+  public
+    function WriteEx(const Buffer: Integer; Count: Integer): Integer; overload;
+    function WriteEx(const Buffer: Int64; Count: Integer): Integer; overload;
+    function WriteEx(const Buffer: Boolean; Count: Integer): Integer; overload;
+    function WriteEx(const Buffer: TPacketType; Count: Integer): Integer; overload;
+    function WriteEx(const Buffer: Byte; Count: Integer): Integer; overload;
+  end;
+
+  TDSConnectInfo = class(TObject)
+  public
+    Ip: string;
+    Port: Word;
+    Tick: Cardinal;
+  end;
+
+  TDSTimer = class(TThread)
+  private
+    FMethod: TThreadMethod;
+    FElapse: Cardinal;
+    procedure SetMethod(Value: TThreadMethod);
+    procedure SetElapse(Value: Cardinal);
+  protected
+    procedure Execute; override;
+  public
+    constructor Create;
+    property Method: TThreadMethod read FMethod write SetMethod;
+    property Elapse: Cardinal read FElapse write SetElapse;
   end;
 
   TIndexs = TList<Integer>;
@@ -45,6 +76,8 @@ type
     constructor Create;
     destructor Destroy; override;
   end;
+
+  TDSConnectQueue = TObjectList<TDSConnectInfo>;
 
   TDSQueue = class(TObject)
   private
@@ -76,6 +109,7 @@ type
 
   TDSConnection = class(TObject)
   private
+    FParent: Boolean;
     FPacketId: Int64;
     FRemoteAddr: string;
     FRemotePort: Word;
@@ -89,6 +123,7 @@ type
     FRecvConfirm: TDSConfirms;
     FLocker: TCriticalSection;
     FConfirmTick: Cardinal;
+    FDisconnectTick: Cardinal;
     procedure SetAddr(Value: string);
     procedure SetPort(Value: Word);
     procedure SetTick(Value: Cardinal);
@@ -96,6 +131,8 @@ type
     procedure SetConnected(Value: Boolean);
     procedure SetDisconnected(Value: Boolean);
     procedure SetToken(Value: string);
+    procedure SetDisconnectTick(Value: Cardinal);
+    procedure SetParent(Value: Boolean);
   public
     constructor Create;
     destructor Destroy; override;
@@ -122,9 +159,11 @@ type
     property Id: string read FId write SetId;
     property Connected: Boolean read FConnected write SetConnected;
     property Disconnect: Boolean read FDisconnect write SetDisconnected;
+    property DisconnectTick: Cardinal read FDisconnectTick write SetDisconnectTick;
     property Token: string read FToken write SetToken;
     property SendQueue: TDSQueue read FSendQueue;
     property RecvQueue: TDSQueue read FRecvQueue;
+    property Parent: Boolean read FParent write SetParent;
   end;
 
   TDSConnectionsEx = TList<TDSConnection>;
@@ -162,6 +201,69 @@ begin
 {$ELSE}
   Result := Windows.GetTickCount;
 {$IFEND}
+end;
+
+// class TBytesStreamEx
+function TBytesStreamEx.WriteEx(const Buffer: Integer; Count: Integer): Integer;
+begin
+  Result := Write(Buffer, SizeOf(Buffer));
+end;
+
+function TBytesStreamEx.WriteEx(const Buffer: Int64; Count: Integer): Integer;
+begin
+  Result := Write(Buffer, SizeOf(Buffer));
+end;
+
+function TBytesStreamEx.WriteEx(const Buffer: Boolean; Count: Integer): Integer;
+begin
+  Result := Write(Buffer, SizeOf(Buffer));
+end;
+
+function TBytesStreamEx.WriteEx(const Buffer: TPacketType; Count: Integer): Integer;
+begin
+  Result := Write(Buffer, SizeOf(Buffer));
+end;
+
+
+function TBytesStreamEx.WriteEx(const Buffer: Byte; Count: Integer): Integer;
+begin
+  Result := Write(Buffer, SizeOf(Buffer));
+end;
+
+// class TDSTimer
+
+constructor TDSTimer.Create;
+begin
+  inherited Create(True);
+  FreeOnTerminate := True;
+  FMethod := nil;
+  FElapse := 1000;
+end;
+
+procedure TDSTimer.SetMethod(Value: TThreadMethod);
+begin
+  if @Value <> @FMethod then
+    FMethod := Value;
+end;
+
+procedure TDSTimer.SetElapse(Value: Cardinal);
+begin
+  if Value <> FElapse then
+    FElapse := Value;
+end;
+
+procedure TDSTimer.Execute;
+begin
+  while not Terminated do
+  begin
+
+    if (@FMethod <> nil) and (Assigned(FMethod)) then
+    begin
+      FMethod;
+    end;
+
+    Sleep(FElapse);
+  end;
 end;
 
 // class TDSPacket
@@ -305,11 +407,13 @@ end;
 constructor TDSConnection.Create;
 begin
   inherited Create;
+  FParent := False;
   FConfirmTick := TDSMisc.TickCount;
   FPacketId := 0;
   FRemoteAddr := '';
   FRemotePort := 0;
   FTick := TDSMisc.TickCount;
+  FDisconnectTick := TDSMisc.TickCount;
   FId := '';
   FConnected := False;
   FDisconnect := False;
@@ -671,6 +775,16 @@ end;
 procedure TDSConnection.SetToken(Value: string);
 begin
   FToken := Value;
+end;
+
+procedure TDSConnection.SetDisconnectTick(Value: Cardinal);
+begin
+  FDisconnectTick := Value;
+end;
+
+procedure TDSConnection.SetParent(Value: Boolean);
+begin
+  FParent := Value;
 end;
 
 // class TDSConnectionList
